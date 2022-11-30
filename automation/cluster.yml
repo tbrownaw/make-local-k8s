@@ -1,0 +1,42 @@
+- hosts: nodes
+  tasks:
+    - name: test command
+      ansible.builtin.command: w
+- name: Set up admin nodes
+  hosts: nodes_admin
+  tasks:
+    - name: crictl (for debugging)
+      command: crictl config --set runtime-endpoint=unix:///var/run/crio/crio.sock
+    - name: init
+#      shell: kubeadm init --pod-network-cidr=172.16.0.0/16 | tee /var/log/kubeadm-init.log
+      shell: kubeadm init --pod-network-cidr=10.244.0.0/16 --cri-socket=unix:///var/run/crio/crio.sock 2>&1 | tee /var/log/kubeadm-init.log
+      args:
+        creates: /etc/kubernetes/admin.conf
+    - name: get creds
+      fetch:
+        src: /etc/kubernetes/admin.conf
+        dest: admin-{{ inventory_hostname }}.conf
+        flat: yes
+    - name: get output
+      fetch:
+        src: /var/log/kubeadm-init.log
+        dest: init-{{ inventory_hostname }}.stdout
+        flat: yes
+- name: flannel
+  hosts: localhost
+  tasks:
+    - name: flannel
+      command: kubectl --kubeconfig admin-clone-00.conf apply -f https://raw.githubusercontent.com/flannel-io/flannel/master/Documentation/kube-flannel.yml
+- name: get join cmd
+  hosts: localhost
+  tasks:
+    - command: perl -ne 'BEGIN { use English; } $x=1 if /kubeadm join/; if ($x) { $d .= $ARG; } $x=0 if ! /\\$/; END { $d =~ s/\\\n//; print $d; }' init-clone-00.stdout
+      # can't just use sed for that, too much of a pain to strip internal newlines
+      register: get_join_command
+- name: Set up user nodes
+  hosts: nodes_user
+  tasks:
+    - name: join
+      command: "{{ hostvars['localhost']['get_join_command'].stdout }}"
+
+
